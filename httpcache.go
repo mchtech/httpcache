@@ -103,6 +103,7 @@ type Transport struct {
 	Cache     Cache
 	// If true, responses returned from the cache will be given an extra header, X-From-Cache
 	MarkCachedResponses bool
+	CanCache            func(req *http.Request, resp *http.Response) bool
 }
 
 // NewTransport returns a new Transport with the
@@ -139,6 +140,11 @@ func varyMatches(cachedResp *http.Response, req *http.Request) bool {
 func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
 	cacheKey := cacheKey(req)
 	cacheable := (req.Method == "GET" || req.Method == "HEAD") && req.Header.Get("range") == ""
+
+	if t.CanCache != nil {
+		cacheable = cacheable && t.CanCache(req, resp)
+	}
+
 	var cachedResp *http.Response
 	if cacheable {
 		cachedResp, err = CachedResponse(t.Cache, req)
@@ -215,6 +221,9 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 			if err != nil {
 				return nil, err
 			}
+		}
+		if t.CanCache != nil {
+			cacheable = cacheable && t.CanCache(req, resp)
 		}
 	}
 

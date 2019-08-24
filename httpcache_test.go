@@ -167,6 +167,7 @@ func teardown() {
 
 func resetTest() {
 	s.transport.Cache = NewMemoryCache()
+	s.transport.CanCache = nil
 	clock = &realClock{}
 }
 
@@ -1471,5 +1472,103 @@ func TestClientTimeout(t *testing.T) {
 	}
 	if taken >= 2*time.Second {
 		t.Error("client.Do took 2+ seconds, want < 2 seconds")
+	}
+}
+
+func TestCanCache(t *testing.T) {
+	resetTest()
+
+	req, err := http.NewRequest("GET", s.server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Add("cache-control", "only-if-cached")
+
+	cacheReq := func() {
+		req, err := http.NewRequest("GET", s.server.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := s.client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.Header.Get(XFromCache) != "" {
+			t.Fatal("XFromCache header isn't blank")
+		}
+		_, err = ioutil.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	cacheCheckReq := func(req *http.Request) {
+		s.transport.CanCache = func(req *http.Request, resp *http.Response) bool {
+			return true
+		}
+		resp, err := s.client.Do(req)
+		if err != nil {
+			t.Error("got error", err)
+		}
+		if resp == nil {
+			t.Error("got nil resp, want non-nil resp")
+		}
+		t.Log(resp.Header.Get(XFromCache))
+		if resp.Header.Get(XFromCache) == "" {
+			t.Error("got non-cached resp, want cached resp")
+		}
+	}
+	cacheReq()
+	cacheCheckReq(req)
+	{
+		var checked bool
+		s.transport.CanCache = func(req *http.Request, resp *http.Response) bool {
+			if req != nil {
+				checked = true
+				if req.URL.String() == s.server.URL {
+					return false
+				}
+			}
+			return true
+		}
+		resp, err := s.client.Do(req)
+		if err != nil {
+			t.Error("got error", err)
+		}
+		if resp == nil {
+			t.Error("got nil resp, want non-nil resp")
+		}
+		if resp.Header.Get(XFromCache) != "" {
+			t.Error("got cached resp, want non-cached resp")
+		}
+		if !checked {
+			t.Error("check func not run")
+		}
+	}
+	resetTest()
+	{
+		var checked bool
+		s.transport.CanCache = func(req *http.Request, resp *http.Response) bool {
+			if resp != nil {
+				checked = true
+				if resp.StatusCode >= 0 {
+					return false
+				}
+			}
+			return true
+		}
+		resp, err := s.client.Do(req)
+		if err != nil {
+			t.Error("got error", err)
+		}
+		if resp == nil {
+			t.Error("got nil resp, want non-nil resp")
+		}
+		if resp.Header.Get(XFromCache) != "" {
+			t.Error("got cached resp, want non-cached resp")
+		}
+		if !checked {
+			t.Error("check func not run")
+		}
 	}
 }
