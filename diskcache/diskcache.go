@@ -7,13 +7,19 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/hex"
-	"github.com/peterbourgon/diskv"
 	"io"
+
+	"github.com/peterbourgon/diskv"
 )
 
 // Cache is an implementation of httpcache.Cache that supplements the in-memory map with persistent storage
 type Cache struct {
 	d *diskv.Diskv
+}
+
+// Has return whether key has been cached
+func (c *Cache) Has(key string) (ok bool) {
+	return c.d.Has(keyToFilename(key))
 }
 
 // Get returns the response corresponding to key if present
