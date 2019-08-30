@@ -31,9 +31,9 @@ const (
 type Cache interface {
 	// Get returns the []byte representation of a cached response and a bool
 	// set to true if the value isn't empty
-	Get(key string) (responseBytes []byte, ok bool)
+	Get(key string) (responseBytes io.ReadCloser, ok bool)
 	// Set stores the []byte representation of a response against a key
-	Set(key string, responseBytes []byte)
+	Set(key string, responseBytes io.ReadCloser)
 	// Delete removes the value associated with the key
 	Delete(key string)
 }
@@ -54,9 +54,7 @@ func CachedResponse(c Cache, req *http.Request) (resp *http.Response, err error)
 	if !ok {
 		return
 	}
-
-	b := bytes.NewBuffer(cachedVal)
-	return http.ReadResponse(bufio.NewReader(b), req)
+	return http.ReadResponse(bufio.NewReader(cachedVal), req)
 }
 
 // MemoryCache is an implemtation of Cache that stores responses in an in-memory map.
@@ -66,17 +64,19 @@ type MemoryCache struct {
 }
 
 // Get returns the []byte representation of the response and true if present, false if not
-func (c *MemoryCache) Get(key string) (resp []byte, ok bool) {
+func (c *MemoryCache) Get(key string) (resp io.ReadCloser, ok bool) {
+	var data []byte
 	c.mu.RLock()
-	resp, ok = c.items[key]
+	data, ok = c.items[key]
+	resp = ioutil.NopCloser(bytes.NewReader(data))
 	c.mu.RUnlock()
 	return resp, ok
 }
 
 // Set saves response resp to the cache with key
-func (c *MemoryCache) Set(key string, resp []byte) {
+func (c *MemoryCache) Set(key string, resp io.ReadCloser) {
 	c.mu.Lock()
-	c.items[key] = resp
+	c.items[key], _ = ioutil.ReadAll(resp)
 	c.mu.Unlock()
 }
 
@@ -246,14 +246,14 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 					resp.Body = ioutil.NopCloser(r)
 					respBytes, err := httputil.DumpResponse(&resp, true)
 					if err == nil {
-						t.Cache.Set(cacheKey, respBytes)
+						t.Cache.Set(cacheKey, ioutil.NopCloser(bytes.NewReader(respBytes)))
 					}
 				},
 			}
 		default:
 			respBytes, err := httputil.DumpResponse(resp, true)
 			if err == nil {
-				t.Cache.Set(cacheKey, respBytes)
+				t.Cache.Set(cacheKey, ioutil.NopCloser(bytes.NewReader(respBytes)))
 			}
 		}
 	} else {

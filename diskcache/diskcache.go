@@ -4,7 +4,6 @@
 package diskcache
 
 import (
-	"bytes"
 	"crypto/md5"
 	"encoding/hex"
 	"io"
@@ -23,19 +22,18 @@ func (c *Cache) Has(key string) (ok bool) {
 }
 
 // Get returns the response corresponding to key if present
-func (c *Cache) Get(key string) (resp []byte, ok bool) {
+func (c *Cache) Get(key string) (resp io.ReadCloser, ok bool) {
 	key = keyToFilename(key)
-	resp, err := c.d.Read(key)
-	if err != nil {
-		return []byte{}, false
+	if stream, err := c.d.ReadStream(key, true); err == nil {
+		return stream, true
 	}
-	return resp, true
+	return nil, false
 }
 
 // Set saves a response to the cache as key
-func (c *Cache) Set(key string, resp []byte) {
+func (c *Cache) Set(key string, resp io.ReadCloser) {
 	key = keyToFilename(key)
-	c.d.WriteStream(key, bytes.NewReader(resp), true)
+	c.d.WriteStream(key, resp, true)
 }
 
 // Delete removes the response with key from the cache
