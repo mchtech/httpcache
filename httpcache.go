@@ -10,13 +10,17 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
+	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -167,6 +171,7 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 			// Can only use cached value if the new request doesn't Vary significantly
 			freshness := getFreshness(cachedResp.Header, req.Header)
 			if freshness == fresh {
+				fmt.Println("fresh")
 				return cachedResp, nil
 			}
 
@@ -238,17 +243,28 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 		}
 		switch req.Method {
 		case "GET":
-			// Delay caching until EOF is reached.
-			resp.Body = &cachingReadCloser{
-				R: resp.Body,
-				OnEOF: func(r io.Reader) {
-					resp := *resp
-					resp.Body = ioutil.NopCloser(r)
-					respBytes, err := httputil.DumpResponse(&resp, true)
-					if err == nil {
-						t.Cache.Set(cacheKey, ioutil.NopCloser(bytes.NewReader(respBytes)))
-					}
-				},
+			if tmpfile, err := os.Create(uuid.New().String()); err == nil {
+				// Delay caching until EOF is reached.
+				resp.Body = &cachingReadCloser{
+					TmpFile: tmpfile,
+					R:       resp.Body,
+					OnEOF: func(r io.Reader) {
+						// resp := *resp
+						resp.Body = ioutil.NopCloser(r)
+
+						if header, err := httputil.DumpResponse(resp, false); err == nil {
+							mr := io.MultiReader(bytes.NewReader(header), r)
+							t.Cache.Set(cacheKey, ioutil.NopCloser(mr))
+						}
+
+						os.Remove(tmpfile.Name())
+
+						// respBytes, err := httputil.DumpResponse(&resp, true)
+						// if err == nil {
+						// 	t.Cache.Set(cacheKey, ioutil.NopCloser(bytes.NewReader(respBytes)))
+						// }
+					},
+				}
 			}
 		default:
 			respBytes, err := httputil.DumpResponse(resp, true)
@@ -527,23 +543,22 @@ func headerAllCommaSepValues(headers http.Header, name string) []string {
 // handler with a full copy of the content read from R when EOF is
 // reached.
 type cachingReadCloser struct {
+	TmpFile io.ReadWriteSeeker
 	// Underlying ReadCloser.
 	R io.ReadCloser
 	// OnEOF is called with a copy of the content of R when EOF is reached.
 	OnEOF func(io.Reader)
 
-	buf bytes.Buffer // buf stores a copy of the content of R.
+	// buf bytes.Buffer // buf stores a copy of the content of R.
 }
 
-// Read reads the next len(p) bytes from R or until R is drained. The
-// return value n is the number of bytes read. If R has no data to
-// return, err is io.EOF and OnEOF is called with a full copy of what
-// has been read so far.
 func (r *cachingReadCloser) Read(p []byte) (n int, err error) {
 	n, err = r.R.Read(p)
-	r.buf.Write(p[:n])
+	r.TmpFile.Write(p[:n])
+	// r.buf.Write(p[:n])
 	if err == io.EOF {
-		r.OnEOF(bytes.NewReader(r.buf.Bytes()))
+		r.TmpFile.Seek(0, io.SeekStart)
+		r.OnEOF(r.TmpFile)
 	}
 	return n, err
 }
