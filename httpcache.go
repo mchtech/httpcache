@@ -243,7 +243,7 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 		}
 		switch req.Method {
 		case "GET":
-			if tmpfile, err := os.Create(uuid.New().String()); err == nil {
+			if tmpfile, err := os.Create(os.TempDir() + uuid.New().String()); err == nil {
 				// Delay caching until EOF is reached.
 				resp.Body = &cachingReadCloser{
 					TmpFile: tmpfile,
