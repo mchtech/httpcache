@@ -24,7 +24,9 @@ const (
 	fresh
 	transparent
 	// XFromCache is the header added to responses that are returned from the cache
-	XFromCache = "X-From-Cache"
+	XFromCache = "X-Proxy-Cache"
+	// XProxyCached -
+	XProxyCached = "X-Proxy-Cached"
 )
 
 // A Cache interface is used by the Transport to store and retrieve responses.
@@ -161,6 +163,7 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 	if cacheable && cachedResp != nil && err == nil {
 		if t.MarkCachedResponses {
 			cachedResp.Header.Set(XFromCache, "1")
+			cachedResp.Header.Set(XProxyCached, "1")
 		}
 
 		if varyMatches(cachedResp, req) {
@@ -198,11 +201,15 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 			for _, header := range endToEndHeaders {
 				cachedResp.Header[header] = resp.Header[header]
 			}
+			resp.Body.Close()
 			resp = cachedResp
 		} else if (err != nil || (cachedResp != nil && resp.StatusCode >= 500)) &&
 			req.Method == "GET" && canStaleOnError(cachedResp.Header, req.Header) {
 			// In case of transport failure and stale-if-error activated, returns cached content
 			// when available
+			if resp != nil && resp.Body != nil {
+				resp.Body.Close()
+			}
 			return cachedResp, nil
 		} else {
 			if err != nil || resp.StatusCode != http.StatusOK {
@@ -228,6 +235,10 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 	}
 
 	if cacheable && canStore(parseCacheControl(req.Header), parseCacheControl(resp.Header)) {
+		if t.MarkCachedResponses {
+			resp.Header.Set(XFromCache, "0")
+			resp.Header.Set(XProxyCached, "1")
+		}
 		for _, varyKey := range headerAllCommaSepValues(resp.Header, "vary") {
 			varyKey = http.CanonicalHeaderKey(varyKey)
 			fakeHeader := "X-Varied-" + varyKey
@@ -257,6 +268,10 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 			}
 		}
 	} else {
+		if t.MarkCachedResponses {
+			resp.Header.Set(XFromCache, "0")
+			resp.Header.Set(XProxyCached, "0")
+		}
 		t.Cache.Delete(cacheKey)
 	}
 	return resp, nil
