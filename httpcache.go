@@ -14,6 +14,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,7 +28,26 @@ const (
 	XFromCache = "X-Proxy-Cache"
 	// XProxyCached -
 	XProxyCached = "X-Proxy-Cached"
+	// XProxyFreshness -
+	XProxyFreshness = "X-Proxy-Freshness"
+	// XProxyStaleClient -
+	XProxyStaleClient = "X-Proxy-StaleClient"
 )
+
+// FreshnessToString map
+var FreshnessToString = map[int]string{
+	stale:       "Stale",
+	fresh:       "Fresh",
+	transparent: "Transparent",
+}
+
+// NotModifiedDelHeaders -
+var NotModifiedDelHeaders = []string{
+	"Content-Length",
+	"Content-Type",
+	"Last-Modified",
+	"Status", // HTTP 2.0
+}
 
 // A Cache interface is used by the Transport to store and retrieve responses.
 type Cache interface {
@@ -160,6 +180,15 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 		transport = http.DefaultTransport
 	}
 
+	var freshness = transparent
+	var staleclient = 1
+	defer func() {
+		if t.MarkCachedResponses && resp != nil {
+			resp.Header.Set(XProxyFreshness, FreshnessToString[freshness])
+			resp.Header.Set(XProxyStaleClient, strconv.Itoa(staleclient))
+		}
+	}()
+
 	if cacheable && cachedResp != nil && err == nil {
 		if t.MarkCachedResponses {
 			cachedResp.Header.Set(XFromCache, "1")
@@ -168,8 +197,18 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 
 		if varyMatches(cachedResp, req) {
 			// Can only use cached value if the new request doesn't Vary significantly
-			freshness := getFreshness(cachedResp.Header, req.Header)
+			freshness = getFreshness(cachedResp.Header, req.Header)
 			if freshness == fresh {
+				if req.Header.Get("if-none-match") != "" || req.Header.Get("if-modified-since") != "" {
+					cachedResp.StatusCode = http.StatusNotModified
+					cachedResp.Status = http.StatusText(http.StatusNotModified)
+					cachedResp.Body.Close()
+					cachedResp.Body = ioutil.NopCloser(bytes.NewReader(nil))
+					for _, h := range NotModifiedDelHeaders {
+						cachedResp.Header.Del(h)
+					}
+					cachedResp.ContentLength = 0
+				}
 				return cachedResp, nil
 			}
 
@@ -177,16 +216,18 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 				var req2 *http.Request
 				// Add validators if caller hasn't already done so
 				etag := cachedResp.Header.Get("etag")
-				if etag != "" && req.Header.Get("etag") == "" {
+				if etag != "" && req.Header.Get("if-none-match") == "" {
 					req2 = cloneRequest(req)
 					req2.Header.Set("if-none-match", etag)
+					staleclient = 0
 				}
 				lastModified := cachedResp.Header.Get("last-modified")
-				if lastModified != "" && req.Header.Get("last-modified") == "" {
+				if lastModified != "" && req.Header.Get("if-modified-since") == "" {
 					if req2 == nil {
 						req2 = cloneRequest(req)
 					}
 					req2.Header.Set("if-modified-since", lastModified)
+					staleclient = 0
 				}
 				if req2 != nil {
 					req = req2
@@ -201,15 +242,19 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 			for _, header := range endToEndHeaders {
 				cachedResp.Header[header] = resp.Header[header]
 			}
-			// resp.Body.Close()
+			resp.Body.Close()
+			if staleclient == 1 {
+				cachedResp.StatusCode = http.StatusNotModified
+				cachedResp.Status = http.StatusText(http.StatusNotModified)
+			}
 			resp = cachedResp
 		} else if (err != nil || (cachedResp != nil && resp.StatusCode >= 500)) &&
 			req.Method == "GET" && canStaleOnError(cachedResp.Header, req.Header) {
 			// In case of transport failure and stale-if-error activated, returns cached content
 			// when available
-			// if resp != nil && resp.Body != nil {
-			// 	resp.Body.Close()
-			// }
+			if resp != nil && resp.Body != nil {
+				resp.Body.Close()
+			}
 			return cachedResp, nil
 		} else {
 			if err != nil || resp.StatusCode != http.StatusOK {
@@ -234,6 +279,16 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 		}
 	}
 
+	// 这里没有遵守RPC, 304 Vary头变化应更新缓存, 但实际上没更新
+	if staleclient == 1 && resp.StatusCode == http.StatusNotModified {
+		resp.Body.Close()
+		resp.Body = ioutil.NopCloser(bytes.NewReader(nil))
+		for _, h := range NotModifiedDelHeaders {
+			resp.Header.Del(h)
+		}
+		resp.ContentLength = 0
+	}
+
 	if cacheable && canStore(parseCacheControl(req.Header), parseCacheControl(resp.Header)) {
 		if t.MarkCachedResponses {
 			resp.Header.Set(XFromCache, "0")
@@ -246,6 +301,9 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 			if reqValue != "" {
 				resp.Header.Set(fakeHeader, reqValue)
 			}
+		}
+		if staleclient == 1 && resp.StatusCode == http.StatusNotModified {
+			return resp, nil
 		}
 		switch req.Method {
 		case "GET":
