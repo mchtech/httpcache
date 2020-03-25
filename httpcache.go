@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -192,11 +193,15 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 			if cachedResp == resp {
 				xfromcache = 1
 			}
-			resp.Header.Add(XFromCache, ProxyFromCacheToString[xfromcache])
-			resp.Header.Add(XFromCache, ProxyCachedToString[xproxycached])
-			resp.Header.Add(XFromCache, FreshnessToString[freshness])
-			resp.Header.Add(XFromCache, ProxyWriteCacheToString[xproxywrite])
-			resp.Header.Add(XFromCache, ProxyStaleClientToString[staleclient])
+			var cacheStatus = fmt.Sprintf(
+				"%s, %s, %s, %s, %s",
+				ProxyFromCacheToString[xfromcache],
+				ProxyCachedToString[xproxycached],
+				FreshnessToString[freshness],
+				ProxyWriteCacheToString[xproxywrite],
+				ProxyStaleClientToString[staleclient],
+			)
+			resp.Header.Set(XFromCache, cacheStatus)
 		}
 	}()
 
