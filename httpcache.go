@@ -30,9 +30,9 @@ const (
 
 // FreshnessToString map
 var FreshnessToString = map[int]string{
-	stale:       "Stale",
-	fresh:       "Fresh",
-	transparent: "Transparent",
+	stale:       "stale",
+	fresh:       "fresh",
+	transparent: "transparent",
 }
 
 // ProxyFromCacheToString map
