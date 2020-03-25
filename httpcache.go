@@ -25,13 +25,15 @@ const (
 	fresh
 	transparent
 	// XFromCache is the header added to responses that are returned from the cache
-	XFromCache = "X-Proxy-Cache"
+	XFromCache = "X-Proxy-FromCache"
 	// XProxyCached -
 	XProxyCached = "X-Proxy-Cached"
 	// XProxyFreshness -
 	XProxyFreshness = "X-Proxy-Freshness"
 	// XProxyStaleClient -
 	XProxyStaleClient = "X-Proxy-StaleClient"
+	// XProxyWrite -
+	XProxyWrite = "X-Proxy-WriteCache"
 )
 
 // FreshnessToString map
@@ -160,6 +162,30 @@ func varyMatches(cachedResp *http.Response, req *http.Request) bool {
 // to give the server a chance to respond with NotModified. If this happens, then the cached Response
 // will be returned.
 func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
+
+	var cachedResp *http.Response
+
+	var freshness = transparent
+	var staleclient = 1
+	var xfromcache = 0
+	var xproxycached = -1
+	var xproxywrite = 0
+
+	defer func() {
+		if t.MarkCachedResponses && resp != nil {
+			if cachedResp == resp {
+				xfromcache = 1
+			}
+			resp.Header.Set(XProxyFreshness, FreshnessToString[freshness])
+			resp.Header.Set(XFromCache, strconv.Itoa(xfromcache))
+			resp.Header.Set(XProxyCached, strconv.Itoa(xproxycached))
+			resp.Header.Set(XProxyWrite, strconv.Itoa(xproxywrite))
+			if staleclient != -1 {
+				resp.Header.Set(XProxyStaleClient, strconv.Itoa(staleclient))
+			}
+		}
+	}()
+
 	cacheKey := cacheKey(req)
 	cacheable := (req.Method == "GET" || req.Method == "HEAD") && req.Header.Get("range") == ""
 
@@ -167,11 +193,11 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 		cacheable = cacheable && t.CanCache(req, resp)
 	}
 
-	var cachedResp *http.Response
 	if cacheable {
 		cachedResp, err = CachedResponse(t.Cache, req)
 	} else {
 		// Need to invalidate an existing value
+		xproxycached = 0
 		t.Cache.Delete(cacheKey)
 	}
 
@@ -180,35 +206,21 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 		transport = http.DefaultTransport
 	}
 
-	var freshness = transparent
-	var staleclient = 1
-	defer func() {
-		if t.MarkCachedResponses && resp != nil {
-			resp.Header.Set(XProxyFreshness, FreshnessToString[freshness])
-			resp.Header.Set(XProxyStaleClient, strconv.Itoa(staleclient))
-		}
-	}()
-
 	if cacheable && cachedResp != nil && err == nil {
-		if t.MarkCachedResponses {
-			cachedResp.Header.Set(XFromCache, "1")
-			cachedResp.Header.Set(XProxyCached, "1")
-		}
-
+		xproxycached = 1
 		if varyMatches(cachedResp, req) {
 			// Can only use cached value if the new request doesn't Vary significantly
 			freshness = getFreshness(cachedResp.Header, req.Header)
 			if freshness == fresh {
-				if req.Header.Get("if-none-match") != "" || req.Header.Get("if-modified-since") != "" {
-					cachedResp.StatusCode = http.StatusNotModified
-					cachedResp.Status = http.StatusText(http.StatusNotModified)
-					cachedResp.Body.Close()
-					cachedResp.Body = ioutil.NopCloser(bytes.NewReader(nil))
-					for _, h := range NotModifiedDelHeaders {
-						cachedResp.Header.Del(h)
-					}
-					cachedResp.ContentLength = 0
+				staleclient = -1
+				cachedResp.StatusCode = http.StatusNotModified
+				cachedResp.Status = http.StatusText(http.StatusNotModified)
+				cachedResp.Body.Close()
+				cachedResp.Body = ioutil.NopCloser(bytes.NewReader(nil))
+				for _, h := range NotModifiedDelHeaders {
+					cachedResp.Header.Del(h)
 				}
+				cachedResp.ContentLength = 0
 				return cachedResp, nil
 			}
 
@@ -216,13 +228,15 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 				var req2 *http.Request
 				// Add validators if caller hasn't already done so
 				etag := cachedResp.Header.Get("etag")
-				if etag != "" && req.Header.Get("if-none-match") == "" {
+				// if etag != "" && req.Header.Get("if-none-match") == "" {
+				if etag != "" {
 					req2 = cloneRequest(req)
 					req2.Header.Set("if-none-match", etag)
 					staleclient = 0
 				}
 				lastModified := cachedResp.Header.Get("last-modified")
-				if lastModified != "" && req.Header.Get("if-modified-since") == "" {
+				// if lastModified != "" && req.Header.Get("if-modified-since") == "" {
+				if lastModified != "" {
 					if req2 == nil {
 						req2 = cloneRequest(req)
 					}
@@ -258,6 +272,7 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 			return cachedResp, nil
 		} else {
 			if err != nil || resp.StatusCode != http.StatusOK {
+				xproxycached = 0
 				t.Cache.Delete(cacheKey)
 			}
 			if err != nil {
@@ -265,6 +280,7 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 			}
 		}
 	} else {
+		xproxycached = 0
 		reqCacheControl := parseCacheControl(req.Header)
 		if _, ok := reqCacheControl["only-if-cached"]; ok {
 			resp = newGatewayTimeoutResponse(req)
@@ -289,11 +305,7 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 		resp.ContentLength = 0
 	}
 
-	if cacheable && canStore(parseCacheControl(req.Header), parseCacheControl(resp.Header)) {
-		if t.MarkCachedResponses {
-			resp.Header.Set(XFromCache, "0")
-			resp.Header.Set(XProxyCached, "1")
-		}
+	if cacheable && canStore(parseCacheControl(req.Header), parseCacheControl(resp.Header), resp) {
 		for _, varyKey := range headerAllCommaSepValues(resp.Header, "vary") {
 			varyKey = http.CanonicalHeaderKey(varyKey)
 			fakeHeader := "X-Varied-" + varyKey
@@ -305,31 +317,31 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 		if staleclient == 1 && resp.StatusCode == http.StatusNotModified {
 			return resp, nil
 		}
-		switch req.Method {
-		case "GET":
-			// Delay caching until EOF is reached.
-			resp.Body = &cachingReadCloser{
-				R: resp.Body,
-				OnEOF: func(r io.Reader) {
-					resp := *resp
-					resp.Body = ioutil.NopCloser(r)
-					respBytes, err := httputil.DumpResponse(&resp, true)
-					if err == nil {
-						t.Cache.Set(cacheKey, ioutil.NopCloser(bytes.NewReader(respBytes)))
-					}
-				},
-			}
-		default:
-			respBytes, err := httputil.DumpResponse(resp, true)
-			if err == nil {
-				t.Cache.Set(cacheKey, ioutil.NopCloser(bytes.NewReader(respBytes)))
+		if resp != cachedResp {
+			xproxywrite = 1
+			switch req.Method {
+			case "GET":
+				// Delay caching until EOF is reached.
+				resp.Body = &cachingReadCloser{
+					R: resp.Body,
+					OnEOF: func(r io.Reader) {
+						resp := *resp
+						resp.Body = ioutil.NopCloser(r)
+						respBytes, err := httputil.DumpResponse(&resp, true)
+						if err == nil {
+							t.Cache.Set(cacheKey, ioutil.NopCloser(bytes.NewReader(respBytes)))
+						}
+					},
+				}
+			default:
+				respBytes, err := httputil.DumpResponse(resp, true)
+				if err == nil {
+					t.Cache.Set(cacheKey, ioutil.NopCloser(bytes.NewReader(respBytes)))
+				}
 			}
 		}
 	} else {
-		if t.MarkCachedResponses {
-			resp.Header.Set(XFromCache, "0")
-			resp.Header.Set(XProxyCached, "0")
-		}
+		xproxycached = 0
 		t.Cache.Delete(cacheKey)
 	}
 	return resp, nil
@@ -445,7 +457,21 @@ func getFreshness(respHeaders, reqHeaders http.Header) (freshness int) {
 	}
 
 	if lifetime > currentAge {
-		return fresh
+		var fe, fl bool
+		inm := reqHeaders.Get("if-none-match")
+		etag := respHeaders.Get("etag")
+		if inm == etag && inm != "" {
+			fe = true
+		}
+		ims := reqHeaders.Get("if-modified-since")
+		lm := respHeaders.Get("last-modified")
+		if ims == lm && ims != "" {
+			fl = true
+		}
+		// 两个都一样 或 一个为空一个一样
+		if (fe && fl) || (fe && (ims == "" || lm == "")) || (fl && (inm == "" || etag == "")) {
+			return fresh
+		}
 	}
 
 	return stale
@@ -503,7 +529,7 @@ func getEndToEndHeaders(respHeaders http.Header) []string {
 		"Proxy-Authenticate":  {},
 		"Proxy-Authorization": {},
 		"Te":                  {},
-		"Trailers":            {},
+		"Trailer":             {},
 		"Transfer-Encoding":   {},
 		"Upgrade":             {},
 	}
@@ -523,11 +549,14 @@ func getEndToEndHeaders(respHeaders http.Header) []string {
 	return endToEndHeaders
 }
 
-func canStore(reqCacheControl, respCacheControl cacheControl) (canStore bool) {
+func canStore(reqCacheControl, respCacheControl cacheControl, resp *http.Response) (canStore bool) {
 	if _, ok := respCacheControl["no-store"]; ok {
 		return false
 	}
 	if _, ok := reqCacheControl["no-store"]; ok {
+		return false
+	}
+	if resp.Header.Get("etag") == "" && resp.Header.Get("last-modified") == "" {
 		return false
 	}
 	return true
