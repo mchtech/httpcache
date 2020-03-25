@@ -14,7 +14,6 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,15 +24,7 @@ const (
 	fresh
 	transparent
 	// XFromCache is the header added to responses that are returned from the cache
-	XFromCache = "X-Proxy-FromCache"
-	// XProxyCached -
-	XProxyCached = "X-Proxy-Cached"
-	// XProxyFreshness -
-	XProxyFreshness = "X-Proxy-Freshness"
-	// XProxyStaleClient -
-	XProxyStaleClient = "X-Proxy-StaleClient"
-	// XProxyWrite -
-	XProxyWrite = "X-Proxy-WriteCache"
+	XFromCache = "X-Proxy-Cache"
 )
 
 // FreshnessToString map
@@ -41,6 +32,31 @@ var FreshnessToString = map[int]string{
 	stale:       "Stale",
 	fresh:       "Fresh",
 	transparent: "Transparent",
+}
+
+// ProxyFromCacheToString map
+var ProxyFromCacheToString = map[int]string{
+	0: "miss",
+	1: "hit",
+}
+
+// ProxyCachedToString map
+var ProxyCachedToString = map[int]string{
+	0: "no-cache",
+	1: "cached",
+}
+
+// ProxyWriteCacheToString map
+var ProxyWriteCacheToString = map[int]string{
+	0: "no-store",
+	1: "store",
+}
+
+// ProxyStaleClientToString map
+var ProxyStaleClientToString = map[int]string{
+	-1: "use-none",
+	0:  "use-cache-header",
+	1:  "use-client-header",
 }
 
 // NotModifiedDelHeaders -
@@ -168,7 +184,7 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 	var freshness = transparent
 	var staleclient = 1
 	var xfromcache = 0
-	var xproxycached = -1
+	var xproxycached = 0
 	var xproxywrite = 0
 
 	defer func() {
@@ -176,13 +192,11 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 			if cachedResp == resp {
 				xfromcache = 1
 			}
-			resp.Header.Set(XProxyFreshness, FreshnessToString[freshness])
-			resp.Header.Set(XFromCache, strconv.Itoa(xfromcache))
-			resp.Header.Set(XProxyCached, strconv.Itoa(xproxycached))
-			resp.Header.Set(XProxyWrite, strconv.Itoa(xproxywrite))
-			if staleclient != -1 {
-				resp.Header.Set(XProxyStaleClient, strconv.Itoa(staleclient))
-			}
+			resp.Header.Add(XFromCache, ProxyFromCacheToString[xfromcache])
+			resp.Header.Add(XFromCache, ProxyCachedToString[xproxycached])
+			resp.Header.Add(XFromCache, FreshnessToString[freshness])
+			resp.Header.Add(XFromCache, ProxyWriteCacheToString[xproxywrite])
+			resp.Header.Add(XFromCache, ProxyStaleClientToString[staleclient])
 		}
 	}()
 
@@ -197,7 +211,6 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 		cachedResp, err = CachedResponse(t.Cache, req)
 	} else {
 		// Need to invalidate an existing value
-		xproxycached = 0
 		t.Cache.Delete(cacheKey)
 	}
 
