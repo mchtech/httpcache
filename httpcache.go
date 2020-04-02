@@ -272,6 +272,9 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 			// Replace the 304 response with the one from cache, but update with some new headers
 			endToEndHeaders := getEndToEndHeaders(resp.Header)
 			for _, header := range endToEndHeaders {
+				if staleclient == 0 && header == "Content-Length" {
+					continue
+				}
 				cachedResp.Header[header] = resp.Header[header]
 			}
 			resp.Body.Close()
