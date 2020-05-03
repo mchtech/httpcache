@@ -88,8 +88,8 @@ func (k *contextKey) String() string { return "httpcache context value " + k.nam
 // CacheRangeContextKey -
 var CacheRangeContextKey = &contextKey{"cache-range"}
 
-// cacheKey returns the cache key for req.
-func cacheKey(req *http.Request) (key string) {
+// CacheKey returns the cache key for req.
+func CacheKey(req *http.Request) (key string) {
 	defer func() {
 		if v := req.Context().Value(CacheRangeContextKey); v != nil {
 			key += "-" + req.Header.Get("Range")
@@ -106,7 +106,7 @@ func cacheKey(req *http.Request) (key string) {
 // CachedResponse returns the cached http.Response for req if present, and nil
 // otherwise.
 func CachedResponse(c Cache, req *http.Request) (resp *http.Response, err error) {
-	cachedVal, ok := c.Get(cacheKey(req))
+	cachedVal, ok := c.Get(CacheKey(req))
 	if !ok {
 		return
 	}
@@ -220,7 +220,7 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 		}
 	}()
 
-	cacheKey := cacheKey(req)
+	cacheKey := CacheKey(req)
 	cacheable := (req.Method == "GET" || req.Method == "HEAD") && (req.Header.Get("range") == "" || nil != req.Context().Value(CacheRangeContextKey))
 
 	if t.CanCache != nil {
