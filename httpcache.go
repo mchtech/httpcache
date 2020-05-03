@@ -79,8 +79,23 @@ type Cache interface {
 	Delete(key string)
 }
 
+type contextKey struct {
+	name string
+}
+
+func (k *contextKey) String() string { return "httpcache context value " + k.name }
+
+// CacheRangeContextKey -
+var CacheRangeContextKey = &contextKey{"cache-range"}
+
 // cacheKey returns the cache key for req.
-func cacheKey(req *http.Request) string {
+func cacheKey(req *http.Request) (key string) {
+	defer func() {
+		if v := req.Context().Value(CacheRangeContextKey); v != nil {
+			key += "-" + req.Header.Get("Range")
+			return
+		}
+	}()
 	if req.Method == http.MethodGet {
 		return req.URL.String()
 	} else {
@@ -206,7 +221,7 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 	}()
 
 	cacheKey := cacheKey(req)
-	cacheable := (req.Method == "GET" || req.Method == "HEAD") && req.Header.Get("range") == ""
+	cacheable := (req.Method == "GET" || req.Method == "HEAD") && (req.Header.Get("range") == "" || nil != req.Context().Value(CacheRangeContextKey))
 
 	if t.CanCache != nil {
 		cacheable = cacheable && t.CanCache(req, resp)
