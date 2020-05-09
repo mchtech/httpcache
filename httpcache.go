@@ -283,7 +283,7 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 		}
 
 		resp, err = transport.RoundTrip(req)
-		if err == nil && req.Method == "GET" && resp.StatusCode == http.StatusNotModified {
+		if err == nil && (req.Method == "GET" || req.Method == "HEAD") && resp.StatusCode == http.StatusNotModified {
 			// Replace the 304 response with the one from cache, but update with some new headers
 			endToEndHeaders := getEndToEndHeaders(resp.Header)
 			for _, header := range endToEndHeaders {
@@ -299,7 +299,7 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 			}
 			resp = cachedResp
 		} else if (err != nil || (cachedResp != nil && resp.StatusCode >= 500)) &&
-			req.Method == "GET" && canStaleOnError(cachedResp.Header, req.Header) {
+			(req.Method == "GET" || req.Method == "HEAD") && canStaleOnError(cachedResp.Header, req.Header) {
 			// In case of transport failure and stale-if-error activated, returns cached content
 			// when available
 			if resp != nil && resp.Body != nil {
