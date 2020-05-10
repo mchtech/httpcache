@@ -3,6 +3,10 @@
 package leveldbcache
 
 import (
+	"bytes"
+	"io"
+	"io/ioutil"
+
 	"github.com/syndtr/goleveldb/leveldb"
 )
 
@@ -11,19 +15,29 @@ type Cache struct {
 	db *leveldb.DB
 }
 
+// Has returns whether key has been cached
+func (c *Cache) Has(key string) (ok bool) {
+	ok, _ = c.db.Has([]byte(key), nil)
+	return
+}
+
 // Get returns the response corresponding to key if present
-func (c *Cache) Get(key string) (resp []byte, ok bool) {
-	var err error
-	resp, err = c.db.Get([]byte(key), nil)
+func (c *Cache) Get(key string) (resp io.ReadCloser, ok bool) {
+	data, err := c.db.Get([]byte(key), nil)
 	if err != nil {
-		return []byte{}, false
+		return
 	}
+	resp = ioutil.NopCloser(bytes.NewReader(data))
 	return resp, true
 }
 
 // Set saves a response to the cache as key
-func (c *Cache) Set(key string, resp []byte) {
-	c.db.Put([]byte(key), resp, nil)
+func (c *Cache) Set(key string, resp io.ReadCloser) {
+	data, err := ioutil.ReadAll(resp)
+	if err != nil {
+		return
+	}
+	c.db.Put([]byte(key), data, nil)
 }
 
 // Delete removes the response with key from the cache

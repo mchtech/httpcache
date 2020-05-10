@@ -70,6 +70,8 @@ var NotModifiedDelHeaders = []string{
 
 // A Cache interface is used by the Transport to store and retrieve responses.
 type Cache interface {
+	// Has returns whether key has been cached
+	Has(key string) (ok bool)
 	// Get returns the []byte representation of a cached response and a bool
 	// set to true if the value isn't empty
 	Get(key string) (responseBytes io.ReadCloser, ok bool)
@@ -127,6 +129,14 @@ func (c *MemoryCache) Get(key string) (resp io.ReadCloser, ok bool) {
 	resp = ioutil.NopCloser(bytes.NewReader(data))
 	c.mu.RUnlock()
 	return resp, ok
+}
+
+// Has returns whether key has been cached
+func (c *MemoryCache) Has(key string) (ok bool) {
+	c.mu.RLock()
+	_, ok = c.items[key]
+	c.mu.RUnlock()
+	return ok
 }
 
 // Set saves response resp to the cache with key

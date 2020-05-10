@@ -16,7 +16,7 @@ type Cache struct {
 	d *diskv.Diskv
 }
 
-// Has return whether key has been cached
+// Has returns whether key has been cached
 func (c *Cache) Has(key string) (ok bool) {
 	return c.d.Has(keyToFilename(key))
 }

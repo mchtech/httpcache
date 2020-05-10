@@ -9,6 +9,10 @@
 package memcache
 
 import (
+	"bytes"
+	"io"
+	"io/ioutil"
+
 	"github.com/bradfitz/gomemcache/memcache"
 )
 
@@ -24,20 +28,31 @@ func cacheKey(key string) string {
 	return "httpcache:" + key
 }
 
+// Has returns whether key has been cached
+func (c *Cache) Has(key string) (ok bool) {
+	_, err := c.Client.Get(cacheKey(key))
+	return err == nil
+}
+
 // Get returns the response corresponding to key if present.
-func (c *Cache) Get(key string) (resp []byte, ok bool) {
+func (c *Cache) Get(key string) (resp io.ReadCloser, ok bool) {
 	item, err := c.Client.Get(cacheKey(key))
 	if err != nil {
 		return nil, false
 	}
-	return item.Value, true
+	resp = ioutil.NopCloser(bytes.NewReader(item.Value))
+	return resp, true
 }
 
 // Set saves a response to the cache as key.
-func (c *Cache) Set(key string, resp []byte) {
+func (c *Cache) Set(key string, resp io.ReadCloser) {
+	data, err := ioutil.ReadAll(resp)
+	if err != nil {
+		return
+	}
 	item := &memcache.Item{
 		Key:   cacheKey(key),
-		Value: resp,
+		Value: data,
 	}
 	c.Client.Set(item)
 }
